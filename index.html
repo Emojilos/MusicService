@@ -64,6 +64,11 @@
         </div>
       </div>
 
+      <!-- Кнопка play только для мини-плеера на мобилке -->
+      <button id="btn-mini-play" class="btn-mini-play" title="Play/Pause">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+      </button>
+
       <div class="player-center">
         <div class="player-controls">
           <button id="btn-shuffle" title="Shuffle">
@@ -90,6 +95,40 @@
       </div>
     </div>
 
+  </div>
+
+  <!-- Полноэкранный плеер (мобилка) -->
+  <div id="player-fullscreen" class="player-fullscreen">
+    <div class="pf-handle-bar"></div>
+    <img id="pf-cover" class="pf-cover" src="" alt="" />
+    <div class="pf-info">
+      <span id="pf-track"></span>
+      <span id="pf-artist"></span>
+    </div>
+    <div class="pf-progress-section">
+      <input id="pf-progress" type="range" min="0" max="1000" value="0" />
+      <div class="pf-time-labels">
+        <span id="pf-time-current">0:00</span>
+        <span id="pf-time-total">0:00</span>
+      </div>
+    </div>
+    <div class="pf-controls">
+      <button id="pf-shuffle" title="Shuffle">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg>
+      </button>
+      <button id="pf-prev" title="Previous">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
+      </button>
+      <button id="pf-play" title="Play/Pause">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+      </button>
+      <button id="pf-next" title="Next">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+      </button>
+      <button id="pf-repeat" title="Repeat">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>
+      </button>
+    </div>
   </div>
 
   <audio id="audio"></audio>

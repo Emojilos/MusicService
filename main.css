@@ -843,6 +843,40 @@ input[type="range"]::-webkit-slider-thumb {
   padding: 0;
 }
 
+/* ── Mini play button (мобилка) ───────────────────────────────────────────── */
+
+.btn-mini-play {
+  display: none;
+  background: #A855F7;
+  border: none;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  color: #fff;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s, transform 0.1s;
+}
+
+.btn-mini-play:hover {
+  background: #B975F9;
+  transform: scale(1.05);
+}
+
+.btn-mini-play svg {
+  width: 20px;
+  height: 20px;
+  display: block;
+}
+
+/* ── Fullscreen player ────────────────────────────────────────────────────── */
+
+.player-fullscreen {
+  display: none;
+}
+
 /* ── Responsive ───────────────────────────────────────────────────────────── */
 
 @media (max-width: 600px) {
@@ -876,56 +910,254 @@ input[type="range"]::-webkit-slider-thumb {
     height: 100px;
   }
 
+  /* Оверлей смены обложки — частично виден на мобилке */
+  .album-cover-overlay {
+    opacity: 0.5;
+  }
+
   .album-meta h2 {
     font-size: 20px;
   }
 
+  /* ── Кнопки удаления — всегда видны на мобилке ── */
+  .btn-delete-album {
+    opacity: 0.7;
+  }
+
+  .btn-delete-track {
+    opacity: 0.7;
+  }
+
+  /* ── Компактный мини-плеер ── */
+
+  /* Прогресс-бар: без паддинга и меток */
+  .player-progress-wrapper {
+    padding: 0;
+  }
+
+  .progress-labels {
+    display: none;
+  }
+
+  /* Thumb прогресс-бара — всегда виден */
+  #progress-bar::-webkit-slider-thumb {
+    opacity: 1;
+  }
+
+  /* Однострочный плеер: info + mini-play */
   .player-main {
     grid-template-columns: 1fr auto;
-    height: auto;
-    padding: 8px 16px 12px;
-    gap: 8px;
+    padding: 10px 16px 12px;
+    gap: 12px;
+    align-items: center;
+  }
+
+  /* Скрыть полный блок управления и громкость */
+  .player-center {
+    display: none;
   }
 
   .player-volume {
     display: none;
   }
 
+  /* Показать мини-кнопку play */
+  .btn-mini-play {
+    display: flex;
+  }
+
+  .player-info {
+    cursor: pointer;
+  }
+
   .player-info img {
-    width: 42px;
-    height: 42px;
+    width: 40px;
+    height: 40px;
   }
 
-  .player-center {
-    grid-column: 1 / -1;
-    width: 100%;
+  #player-track {
+    font-size: 14px;
   }
 
-  .player-controls {
-    gap: 16px;
-    justify-content: center;
-  }
-
-  .player-controls button {
-    padding: 6px;
-  }
-
-  .player-controls button svg {
-    width: 22px;
-    height: 22px;
-  }
-
-  #btn-play {
-    width: 48px;
-    height: 48px;
-  }
-
-  #btn-play svg {
-    width: 24px;
-    height: 24px;
+  #player-artist {
+    font-size: 13px;
   }
 
   .view {
-    padding-bottom: 160px;
+    padding-bottom: 80px;
+  }
+
+  /* ── Fullscreen player ── */
+
+  .player-fullscreen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    z-index: 150;
+    padding: 16px 24px 40px;
+    transform: translateY(100%);
+    transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    overflow: hidden;
+  }
+
+  .player-fullscreen.open {
+    transform: translateY(0);
+  }
+
+  .pf-handle-bar {
+    width: 40px;
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    margin-bottom: 28px;
+    flex-shrink: 0;
+    cursor: pointer;
+  }
+
+  .pf-cover {
+    width: min(calc(100vw - 48px), 380px);
+    aspect-ratio: 1;
+    object-fit: cover;
+    border-radius: 10px;
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+
+  .pf-info {
+    margin-top: 28px;
+    text-align: center;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  #pf-track {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--accent);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  #pf-artist {
+    font-size: 14px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .pf-progress-section {
+    width: 100%;
+    margin-top: 32px;
+  }
+
+  #pf-progress {
+    display: block;
+    width: 100%;
+    margin: 0;
+  }
+
+  #pf-progress::-webkit-slider-thumb {
+    opacity: 1;
+  }
+
+  .pf-time-labels {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 8px;
+  }
+
+  .pf-time-labels span {
+    font-size: 12px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .pf-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 36px;
+  }
+
+  .pf-controls button {
+    background: none;
+    border: none;
+    color: var(--text);
+    cursor: pointer;
+    padding: 10px;
+    transition: color 0.15s, transform 0.1s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .pf-controls button svg {
+    width: 26px;
+    height: 26px;
+    display: block;
+  }
+
+  .pf-controls button:hover {
+    color: var(--accent);
+    transform: scale(1.1);
+  }
+
+  #pf-prev svg,
+  #pf-next svg {
+    width: 32px;
+    height: 32px;
+  }
+
+  #pf-play {
+    background: #A855F7;
+    border-radius: 50%;
+    width: 64px;
+    height: 64px;
+    color: #fff !important;
+    padding: 0;
+    flex-shrink: 0;
+  }
+
+  #pf-play:hover {
+    background: #B975F9;
+    transform: scale(1.05);
+  }
+
+  #pf-play svg {
+    width: 28px;
+    height: 28px;
+  }
+
+  #pf-shuffle,
+  #pf-repeat {
+    color: var(--muted);
+  }
+
+  #pf-shuffle.mode-active,
+  #pf-repeat.mode-active,
+  #pf-repeat.mode-active-one {
+    color: #A855F7;
+  }
+
+  #pf-repeat.mode-active-one {
+    position: relative;
+  }
+
+  #pf-repeat.mode-active-one::after {
+    content: '1';
+    position: absolute;
+    font-size: 9px;
+    font-weight: bold;
+    bottom: 3px;
+    right: 3px;
+    line-height: 1;
+    color: #A855F7;
   }
 }

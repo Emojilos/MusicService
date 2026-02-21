@@ -22,6 +22,7 @@ const trackList = document.getElementById('track-list');
 const player = document.getElementById('player');
 
 const btnPlay = document.getElementById('btn-play');
+const btnMiniPlay = document.getElementById('btn-mini-play');
 const btnPrev = document.getElementById('btn-prev');
 const btnNext = document.getElementById('btn-next');
 const btnBack = document.getElementById('btn-back');
@@ -36,6 +37,20 @@ const timeTotal = document.getElementById('time-total');
 const playerCover = document.getElementById('player-cover');
 const playerTrack = document.getElementById('player-track');
 const playerArtist = document.getElementById('player-artist');
+
+// Fullscreen player elements
+const playerFullscreen = document.getElementById('player-fullscreen');
+const pfCover = document.getElementById('pf-cover');
+const pfTrack = document.getElementById('pf-track');
+const pfArtist = document.getElementById('pf-artist');
+const pfProgress = document.getElementById('pf-progress');
+const pfTimeCurrent = document.getElementById('pf-time-current');
+const pfTimeTotal = document.getElementById('pf-time-total');
+const pfBtnPlay = document.getElementById('pf-play');
+const pfBtnPrev = document.getElementById('pf-prev');
+const pfBtnNext = document.getElementById('pf-next');
+const pfBtnShuffle = document.getElementById('pf-shuffle');
+const pfBtnRepeat = document.getElementById('pf-repeat');
 
 // ── Supabase ──────────────────────────────────────────────────────────────────
 
@@ -93,6 +108,38 @@ function updateProgressFill(overridePct) {
   progressBar.style.background =
     `linear-gradient(to right, ${color} ${pct}%, var(--border) ${pct}%)`;
   timeCurrent.style.left = `calc(6px + ${pct}% - ${pct * 0.12}px)`;
+  pfProgress.style.background =
+    `linear-gradient(to right, #A855F7 ${pct}%, var(--border) ${pct}%)`;
+}
+
+// ── Fullscreen player ──────────────────────────────────────────────────────────
+
+function openFullscreenPlayer() {
+  playerFullscreen.classList.add('open');
+}
+
+function closeFullscreenPlayer() {
+  playerFullscreen.classList.remove('open');
+}
+
+function updateFullscreenPlayerUI() {
+  if (!currentAlbum || currentTrackIndex === -1) return;
+  const track = currentAlbum.tracks[currentTrackIndex];
+  pfCover.src = currentAlbum.cover;
+  pfTrack.textContent = track.title;
+  pfArtist.textContent = currentAlbum.artist;
+  pfBtnPlay.innerHTML = ICON_PAUSE;
+  pfProgress.value = progressBar.value;
+  pfTimeCurrent.textContent = timeCurrent.textContent;
+  pfTimeTotal.textContent = timeTotal.textContent;
+  updatePfShuffleRepeat();
+}
+
+function updatePfShuffleRepeat() {
+  pfBtnShuffle.classList.toggle('mode-active', isShuffle);
+  pfBtnRepeat.classList.remove('mode-active', 'mode-active-one');
+  if (repeatMode === 'album') pfBtnRepeat.classList.add('mode-active');
+  if (repeatMode === 'one') pfBtnRepeat.classList.add('mode-active-one');
 }
 
 function setView(name) {
@@ -207,9 +254,12 @@ function updatePlayerUI() {
   playerArtist.textContent = currentAlbum.artist;
   playerCover.src = currentAlbum.cover;
   btnPlay.innerHTML = ICON_PAUSE;
+  btnMiniPlay.innerHTML = ICON_PAUSE;
   player.classList.remove('hidden');
   progressBar.value = 0;
+  pfProgress.value = 0;
   updateProgressFill();
+  updateFullscreenPlayerUI();
 }
 
 function highlightActiveTrack() {
@@ -224,10 +274,14 @@ function togglePlay() {
     audio.play();
     isPlaying = true;
     btnPlay.innerHTML = ICON_PAUSE;
+    btnMiniPlay.innerHTML = ICON_PAUSE;
+    pfBtnPlay.innerHTML = ICON_PAUSE;
   } else {
     audio.pause();
     isPlaying = false;
     btnPlay.innerHTML = ICON_PLAY;
+    btnMiniPlay.innerHTML = ICON_PLAY;
+    pfBtnPlay.innerHTML = ICON_PLAY;
   }
 }
 
@@ -285,11 +339,15 @@ function tickProgress() {
   }
 
   if (audio.duration && !isScrubbing) {
-    progressBar.value = (audio.currentTime / audio.duration) * 1000;
+    const val = (audio.currentTime / audio.duration) * 1000;
+    progressBar.value = val;
+    pfProgress.value = val;
   }
   if (audio.duration) {
     updateProgressFill();
-    timeCurrent.textContent = formatTime(audio.currentTime);
+    const cur = formatTime(audio.currentTime);
+    timeCurrent.textContent = cur;
+    pfTimeCurrent.textContent = cur;
   }
 
   // Keep looping if playing or color is still animating
@@ -301,48 +359,63 @@ function tickProgress() {
 }
 
 audio.addEventListener('loadedmetadata', () => {
-  timeTotal.textContent = formatTime(audio.duration);
+  const dur = formatTime(audio.duration);
+  timeTotal.textContent = dur;
+  pfTimeTotal.textContent = dur;
 });
 
 audio.addEventListener('ended', playNext);
 
 audio.addEventListener('pause', () => {
   btnPlay.innerHTML = ICON_PLAY;
+  btnMiniPlay.innerHTML = ICON_PLAY;
+  pfBtnPlay.innerHTML = ICON_PLAY;
   // rAF loop self-terminates when paused and color animation is done
 });
 
 audio.addEventListener('play', () => {
   btnPlay.innerHTML = ICON_PAUSE;
+  btnMiniPlay.innerHTML = ICON_PAUSE;
+  pfBtnPlay.innerHTML = ICON_PAUSE;
   if (!rafId) rafId = requestAnimationFrame(tickProgress);
 });
 
 // ── Controls ──────────────────────────────────────────────────────────────────
 
 btnPlay.addEventListener('click', togglePlay);
+btnMiniPlay.addEventListener('click', togglePlay);
 btnNext.addEventListener('click', playNext);
 btnPrev.addEventListener('click', playPrev);
 
-btnShuffle.addEventListener('click', () => {
+function toggleShuffle() {
   isShuffle = !isShuffle;
   btnShuffle.classList.toggle('mode-active', isShuffle);
-});
+  pfBtnShuffle.classList.toggle('mode-active', isShuffle);
+}
 
-btnRepeat.addEventListener('click', () => {
+function toggleRepeat() {
   if (repeatMode === 'none') {
     repeatMode = 'album';
     audio.loop = false;
     btnRepeat.classList.add('mode-active');
+    pfBtnRepeat.classList.add('mode-active');
   } else if (repeatMode === 'album') {
     repeatMode = 'one';
     audio.loop = true;
     btnRepeat.classList.remove('mode-active');
     btnRepeat.classList.add('mode-active-one');
+    pfBtnRepeat.classList.remove('mode-active');
+    pfBtnRepeat.classList.add('mode-active-one');
   } else {
     repeatMode = 'none';
     audio.loop = false;
     btnRepeat.classList.remove('mode-active-one');
+    pfBtnRepeat.classList.remove('mode-active-one');
   }
-});
+}
+
+btnShuffle.addEventListener('click', toggleShuffle);
+btnRepeat.addEventListener('click', toggleRepeat);
 
 const progressWrapper = document.querySelector('.player-progress-wrapper');
 progressWrapper.addEventListener('mouseenter', () => {
@@ -378,6 +451,51 @@ volumeBar.addEventListener('input', () => {
 
 btnBack.addEventListener('click', () => {
   setView('albums');
+});
+
+// ── Fullscreen player controls ─────────────────────────────────────────────────
+
+pfBtnPlay.addEventListener('click', togglePlay);
+pfBtnPrev.addEventListener('click', playPrev);
+pfBtnNext.addEventListener('click', playNext);
+pfBtnShuffle.addEventListener('click', toggleShuffle);
+pfBtnRepeat.addEventListener('click', toggleRepeat);
+
+// Open fullscreen by tapping player-info area (mobile)
+document.querySelector('.player-info').addEventListener('click', () => {
+  if (currentAlbum && currentTrackIndex !== -1) openFullscreenPlayer();
+});
+
+// Close fullscreen by tapping handle bar
+document.querySelector('.pf-handle-bar').addEventListener('click', closeFullscreenPlayer);
+
+// Close fullscreen by swipe down
+let pfTouchStartY = 0;
+playerFullscreen.addEventListener('touchstart', (e) => {
+  pfTouchStartY = e.touches[0].clientY;
+}, { passive: true });
+playerFullscreen.addEventListener('touchend', (e) => {
+  if (e.changedTouches[0].clientY - pfTouchStartY > 80) closeFullscreenPlayer();
+}, { passive: true });
+
+// Fullscreen progress bar scrubbing
+pfProgress.addEventListener('touchstart', () => { isScrubbing = true; }, { passive: true });
+pfProgress.addEventListener('mousedown', () => { isScrubbing = true; });
+pfProgress.addEventListener('input', () => {
+  if (audio.duration) {
+    const pct = (pfProgress.value / 1000) * 100;
+    pfProgress.style.background =
+      `linear-gradient(to right, #A855F7 ${pct}%, var(--border) ${pct}%)`;
+    progressBar.value = pfProgress.value;
+    progressBar.style.background = pfProgress.style.background;
+    pfTimeCurrent.textContent = formatTime((pfProgress.value / 1000) * audio.duration);
+  }
+});
+pfProgress.addEventListener('change', () => {
+  if (audio.duration) {
+    audio.currentTime = (pfProgress.value / 1000) * audio.duration;
+  }
+  isScrubbing = false;
 });
 
 // ── Keyboard shortcuts ────────────────────────────────────────────────────────
