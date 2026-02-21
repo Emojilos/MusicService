@@ -67,10 +67,6 @@ async function loadUserAlbums() {
   }));
 }
 
-function getAllAlbums() {
-  return [...ALBUMS, ...userAlbums];
-}
-
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function formatTime(seconds) {
@@ -108,7 +104,7 @@ function setView(name) {
 
 function renderAlbums() {
   albumsGrid.innerHTML = '';
-  getAllAlbums().forEach((album, index) => {
+  userAlbums.forEach((album, index) => {
     const card = document.createElement('div');
     card.className = 'album-card';
     card.innerHTML = `
@@ -120,17 +116,15 @@ function renderAlbums() {
     `;
     card.addEventListener('click', () => openAlbum(index));
 
-    if (album._userAlbum) {
-      const delBtn = document.createElement('button');
-      delBtn.className = 'btn-delete-album';
-      delBtn.title = 'Удалить';
-      delBtn.textContent = '×';
-      delBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        deleteUserAlbum(album);
-      });
-      card.appendChild(delBtn);
-    }
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn-delete-album';
+    delBtn.title = 'Удалить';
+    delBtn.textContent = '×';
+    delBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteUserAlbum(album);
+    });
+    card.appendChild(delBtn);
 
     albumsGrid.appendChild(card);
   });
@@ -139,7 +133,7 @@ function renderAlbums() {
 // ── Open album ────────────────────────────────────────────────────────────────
 
 function openAlbum(index) {
-  currentAlbum = getAllAlbums()[index];
+  currentAlbum = userAlbums[index];
 
   document.getElementById('album-cover-big').src = currentAlbum.cover;
   document.getElementById('album-title').textContent = currentAlbum.title;
@@ -160,8 +154,17 @@ function renderTracks() {
       <span class="track-num">${i + 1}</span>
       <span class="track-name">${track.title}</span>
       <span class="track-duration" id="dur-${i}">—</span>
+      <button class="btn-delete-track" title="Удалить трек">×</button>
     `;
     li.addEventListener('click', () => playTrack(i));
+    li.querySelector('.track-name').addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      startRenameTrack(li.querySelector('.track-name'), i);
+    });
+    li.querySelector('.btn-delete-track').addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteTrack(i);
+    });
     trackList.appendChild(li);
 
     // Preload duration without downloading the full file
@@ -172,6 +175,13 @@ function renderTracks() {
       if (el) el.textContent = formatTime(tmp.duration);
     });
   });
+
+  const addBtn = document.createElement('li');
+  addBtn.className = 'track-add-btn';
+  addBtn.id = 'track-add-btn';
+  addBtn.textContent = '+ Добавить треки';
+  addBtn.addEventListener('click', () => addTracksInput.click());
+  trackList.appendChild(addBtn);
 }
 
 // ── Playback ──────────────────────────────────────────────────────────────────
@@ -582,6 +592,185 @@ async function deleteUserAlbum(album) {
 
   userAlbums = userAlbums.filter(a => a.id !== album.id);
   renderAlbums();
+}
+
+// ── Change album cover ────────────────────────────────────────────────────────
+
+const changeCoverInput = document.getElementById('change-cover-input');
+document.getElementById('album-cover-wrapper').addEventListener('click', () => changeCoverInput.click());
+
+changeCoverInput.addEventListener('change', () => {
+  if (changeCoverInput.files[0]) changeCover(changeCoverInput.files[0]);
+  changeCoverInput.value = '';
+});
+
+async function changeCover(file) {
+  const localUrl = URL.createObjectURL(file);
+  document.getElementById('album-cover-big').src = localUrl;
+  playerCover.src = localUrl;
+
+  const ext = file.name.split('.').pop();
+  const coverPath = `${currentAlbum.id}/cover.${ext}`;
+
+  if (currentAlbum._coverPath && currentAlbum._coverPath !== coverPath) {
+    await _sb.storage.from(BUCKET).remove([currentAlbum._coverPath]);
+  }
+
+  const { error: upErr } = await _sb.storage.from(BUCKET).upload(coverPath, file, { upsert: true });
+  if (upErr) { console.error('Ошибка загрузки обложки:', upErr); return; }
+
+  const { error: dbErr } = await _sb.from('albums').update({ cover_path: coverPath }).eq('id', currentAlbum.id);
+  if (dbErr) { console.error('Ошибка обновления обложки:', dbErr); return; }
+
+  const newUrl = _publicUrl(coverPath);
+  currentAlbum.cover = newUrl;
+  currentAlbum._coverPath = coverPath;
+  document.getElementById('album-cover-big').src = newUrl;
+  playerCover.src = newUrl;
+
+  const inList = userAlbums.find(a => a.id === currentAlbum.id);
+  if (inList) { inList.cover = newUrl; inList._coverPath = coverPath; }
+  renderAlbums();
+}
+
+// ── Rename track ──────────────────────────────────────────────────────────────
+
+function startRenameTrack(span, trackIndex) {
+  const oldTitle = span.textContent;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'track-rename-input';
+  input.value = oldTitle;
+  span.replaceWith(input);
+  input.focus();
+  input.select();
+
+  async function commit() {
+    const newTitle = input.value.trim() || oldTitle;
+    input.replaceWith(span);
+    span.textContent = newTitle;
+    if (newTitle !== oldTitle) {
+      currentAlbum.tracks[trackIndex].title = newTitle;
+      if (currentAlbum._userAlbum) await saveTrackRename(trackIndex);
+      if (currentTrackIndex === trackIndex) playerTrack.textContent = newTitle;
+    }
+  }
+
+  input.addEventListener('blur', commit);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { input.value = oldTitle; input.blur(); }
+  });
+}
+
+async function saveTrackRename(trackIndex) {
+  const rawTracks = currentAlbum._trackPaths.map((fp, i) => ({
+    title: currentAlbum.tracks[i].title,
+    file_path: fp,
+    order: i,
+  }));
+  const { error } = await _sb.from('albums').update({ tracks: rawTracks }).eq('id', currentAlbum.id);
+  if (error) console.error('Ошибка переименования:', error);
+  const inList = userAlbums.find(a => a.id === currentAlbum.id);
+  if (inList) inList.tracks[trackIndex].title = currentAlbum.tracks[trackIndex].title;
+}
+
+async function deleteTrack(trackIndex) {
+  if (!currentAlbum) return;
+
+  currentAlbum.tracks.splice(trackIndex, 1);
+
+  if (currentAlbum._userAlbum) {
+    const removedPath = currentAlbum._trackPaths.splice(trackIndex, 1)[0];
+
+    const rawTracks = currentAlbum._trackPaths.map((fp, i) => ({
+      title: currentAlbum.tracks[i].title,
+      file_path: fp,
+      order: i,
+    }));
+    const { error } = await _sb.from('albums').update({ tracks: rawTracks }).eq('id', currentAlbum.id);
+    if (error) { console.error('Ошибка удаления трека:', error); return; }
+
+    if (removedPath) {
+      await _sb.storage.from(BUCKET).remove([removedPath]);
+    }
+
+    const inList = userAlbums.find(a => a.id === currentAlbum.id);
+    if (inList) { inList.tracks = [...currentAlbum.tracks]; inList._trackPaths = [...currentAlbum._trackPaths]; }
+  }
+
+  if (currentTrackIndex === trackIndex) {
+    audio.pause();
+    audio.src = '';
+    isPlaying = false;
+    currentTrackIndex = -1;
+    player.classList.add('hidden');
+  } else if (currentTrackIndex > trackIndex) {
+    currentTrackIndex--;
+  }
+
+  renderTracks();
+  if (currentTrackIndex >= 0) highlightActiveTrack();
+}
+
+// ── Add tracks to existing album ──────────────────────────────────────────────
+
+const addTracksInput = document.getElementById('add-tracks-input');
+
+addTracksInput.addEventListener('change', () => {
+  if (addTracksInput.files.length) addTracksToAlbum(Array.from(addTracksInput.files));
+  addTracksInput.value = '';
+});
+
+async function addTracksToAlbum(files) {
+  if (!currentAlbum) return;
+
+  files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+  const addBtn = document.getElementById('track-add-btn');
+  if (addBtn) { addBtn.classList.add('loading'); addBtn.textContent = 'Подготовка…'; }
+
+  if (addBtn) addBtn.textContent = 'Загрузка…';
+
+  const albumId    = currentAlbum.id;
+  const startIndex = currentAlbum._trackPaths.length;
+  const newMeta    = [];
+
+  try {
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const ext  = file.name.split('.').pop();
+      const filePath = `${albumId}/${startIndex + i}.${ext}`;
+      if (addBtn) addBtn.textContent = `Загрузка (${i + 1}/${files.length})…`;
+      const { error } = await _sb.storage.from(BUCKET).upload(filePath, file);
+      if (error) throw error;
+      newMeta.push({ title: parseTrackTitle(file.name), file_path: filePath, order: startIndex + i });
+    }
+
+    // Rebuild full tracks array for DB (raw format)
+    const rawTracks = currentAlbum._trackPaths.map((fp, i) => ({
+      title: currentAlbum.tracks[i].title,
+      file_path: fp,
+      order: i,
+    }));
+    const updatedTracks = [...rawTracks, ...newMeta];
+
+    const { error } = await _sb.from('albums').update({ tracks: updatedTracks }).eq('id', albumId);
+    if (error) throw error;
+
+    // Update local state
+    currentAlbum.tracks      = [...currentAlbum.tracks,      ...newMeta.map(t => ({ title: t.title, file: _publicUrl(t.file_path) }))];
+    currentAlbum._trackPaths = [...currentAlbum._trackPaths, ...newMeta.map(t => t.file_path)];
+
+    const inList = userAlbums.find(a => a.id === albumId);
+    if (inList) { inList.tracks = currentAlbum.tracks; inList._trackPaths = currentAlbum._trackPaths; }
+
+    renderTracks();
+  } catch (err) {
+    console.error('Ошибка добавления треков:', err);
+    alert('Ошибка при загрузке. Проверь консоль.');
+    if (addBtn) { addBtn.classList.remove('loading'); addBtn.textContent = '+ Добавить треки'; }
+  }
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────

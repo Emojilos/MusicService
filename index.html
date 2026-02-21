@@ -23,7 +23,13 @@
     <header>
       <button id="btn-back" class="btn-back">← Back</button>
       <div id="album-header" class="album-header">
-        <img id="album-cover-big" src="" alt="" />
+        <div id="album-cover-wrapper" class="album-cover-wrapper">
+          <img id="album-cover-big" src="" alt="" />
+          <div class="album-cover-overlay">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="28" height="28"><path d="M12 15.2A3.2 3.2 0 0 1 8.8 12 3.2 3.2 0 0 1 12 8.8 3.2 3.2 0 0 1 15.2 12 3.2 3.2 0 0 1 12 15.2M12 7a5 5 0 0 0-5 5 5 5 0 0 0 5 5 5 5 0 0 0 5-5 5 5 0 0 0-5-5m-7 2H3v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9h-2l-2-2H9L7 9Z"/></svg>
+          </div>
+        </div>
+        <input type="file" id="change-cover-input" accept="image/*" hidden />
         <div class="album-meta">
           <h2 id="album-title"></h2>
           <span id="album-artist"></span>
@@ -131,9 +137,10 @@
     </div>
   </div>
 
+  <input type="file" id="add-tracks-input" accept="audio/*" multiple hidden />
+
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="supabase-config.js"></script>
-  <script src="data.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
