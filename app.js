@@ -5,6 +5,10 @@ const audio = document.getElementById('audio');
 const ICON_PLAY  = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>`;
 const ICON_PAUSE = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>`;
 
+// ── Jamendo ────────────────────────────────────────────────────────────────────
+const JAMENDO_CLIENT_ID = '6c3dba93';
+const JAMENDO_BASE      = 'https://api.jamendo.com/v3.0';
+
 // State
 let currentAlbum = null;
 let currentTrackIndex = -1;
@@ -13,6 +17,18 @@ let progressHovered = false;
 let isShuffle = false;
 let repeatMode = 'none'; // 'none' | 'one' | 'album'
 let userAlbums = [];
+let currentUser = null;
+
+// Favorites & Playlists state
+let userFavorites = [];
+let userPlaylists = [];
+let currentPlaylist = null;
+let navInitialized = false;
+const LS_LAST_TRACK = 'tl_last_track';
+
+// Jamendo state
+let jamendoResults  = [];
+let jamendoSelected = null;
 
 // Elements
 const viewAlbums = document.getElementById('view-albums');
@@ -52,19 +68,48 @@ const pfBtnNext = document.getElementById('pf-next');
 const pfBtnShuffle = document.getElementById('pf-shuffle');
 const pfBtnRepeat = document.getElementById('pf-repeat');
 
+const btnPlayerHeart = document.getElementById('btn-player-heart');
+
+// Auth elements
+const authFormLogin      = document.getElementById('auth-form-login');
+const authFormRegister   = document.getElementById('auth-form-register');
+const loginEmailEl       = document.getElementById('login-email');
+const loginPasswordEl    = document.getElementById('login-password');
+const loginErrorEl       = document.getElementById('login-error');
+const btnLogin           = document.getElementById('btn-login');
+const registerEmailEl    = document.getElementById('register-email');
+const registerPasswordEl = document.getElementById('register-password');
+const registerConfirmEl  = document.getElementById('register-confirm');
+const registerErrorEl    = document.getElementById('register-error');
+const btnRegister        = document.getElementById('btn-register');
+const btnLogout          = document.getElementById('btn-logout');
+
+// Jamendo elements
+const jamendoModal     = document.getElementById('jamendo-modal');
+const jamendoQueryEl   = document.getElementById('jamendo-query');
+const jamendoSearchBtn = document.getElementById('jamendo-search-btn');
+const jamendoResultsEl = document.getElementById('jamendo-results');
+const jamendoStatusEl  = document.getElementById('jamendo-status');
+const jamendoImportBtn = document.getElementById('jamendo-import');
+const jamendoCancelBtn = document.getElementById('jamendo-cancel');
+
 // ── Supabase ──────────────────────────────────────────────────────────────────
 
 const _sb     = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const BUCKET  = 'music';
 
 function _publicUrl(path) {
+  if (path && path.startsWith('http')) return path;
   return _sb.storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
 }
 
 async function loadUserAlbums() {
+  if (!currentUser) return;
+
   const { data, error } = await _sb
     .from('albums')
     .select('*')
+    .eq('user_id', currentUser.id)
     .order('created_at', { ascending: false });
 
   if (error) { console.error('Supabase load error:', error); return; }
@@ -145,6 +190,67 @@ function updatePfShuffleRepeat() {
 function setView(name) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById(`view-${name}`).classList.add('active');
+
+  const navViews = ['home', 'albums', 'favorites'];
+  document.getElementById('bottom-nav').classList.toggle('hidden', !navViews.includes(name));
+  document.querySelectorAll('.nav-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.view === name);
+  });
+}
+
+function initBottomNav() {
+  if (navInitialized) return;
+  navInitialized = true;
+  document.querySelectorAll('.nav-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const view = btn.dataset.view;
+      if (view === 'home') renderHomeView();
+      if (view === 'favorites') renderFavoritesView();
+      setView(view);
+    });
+  });
+  document.getElementById('btn-logout-home').addEventListener('click', handleLogout);
+  document.getElementById('btn-back-playlist').addEventListener('click', () => setView('favorites'));
+  document.getElementById('btn-create-playlist').addEventListener('click', openCreatePlaylistModal);
+  document.getElementById('create-playlist-cancel').addEventListener('click', () =>
+    document.getElementById('create-playlist-modal').classList.add('hidden'));
+  document.getElementById('create-playlist-save').addEventListener('click', async () => {
+    const name = document.getElementById('playlist-name-input').value.trim();
+    if (!name) return;
+    await createPlaylist(name);
+    document.getElementById('playlist-name-input').value = '';
+    document.getElementById('create-playlist-modal').classList.add('hidden');
+  });
+  document.getElementById('add-to-playlist-cancel').addEventListener('click', () =>
+    document.getElementById('add-to-playlist-modal').classList.add('hidden'));
+
+  btnPlayerHeart.addEventListener('click', async () => {
+    if (!currentAlbum || currentTrackIndex === -1) return;
+    await toggleFavorite(currentAlbum.id, currentTrackIndex);
+  });
+}
+
+// ── LocalStorage: last played track ───────────────────────────────────────────
+
+function saveLastTrack() {
+  if (!currentAlbum || currentTrackIndex === -1) return;
+  const track = currentAlbum.tracks[currentTrackIndex];
+  const data = {
+    albumId:    currentAlbum.id,
+    trackIndex: currentTrackIndex,
+    title:      track.title,
+    artist:     currentAlbum.artist,
+    cover:      currentAlbum.cover,
+    file:       track.file,
+  };
+  localStorage.setItem(LS_LAST_TRACK, JSON.stringify(data));
+}
+
+function loadLastTrack() {
+  try {
+    const raw = localStorage.getItem(LS_LAST_TRACK);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
 }
 
 // ── Render albums ─────────────────────────────────────────────────────────────
@@ -197,16 +303,31 @@ function renderTracks() {
     const li = document.createElement('li');
     li.className = 'track-item';
     li.dataset.index = i;
+    const isFav = isTrackFavorited(currentAlbum.id, i);
     li.innerHTML = `
       <span class="track-num">${i + 1}</span>
       <span class="track-name">${track.title}</span>
       <span class="track-duration" id="dur-${i}">—</span>
+      <button class="btn-heart ${isFav ? 'btn-heart--active' : ''}" data-track="${i}" title="В избранное">
+        <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+      </button>
+      <button class="btn-add-to-playlist" data-track="${i}" title="Добавить в плейлист">
+        <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+      </button>
       <button class="btn-delete-track" title="Удалить трек">×</button>
     `;
     li.addEventListener('click', () => playTrack(i));
     li.querySelector('.track-name').addEventListener('dblclick', (e) => {
       e.stopPropagation();
       startRenameTrack(li.querySelector('.track-name'), i);
+    });
+    li.querySelector('.btn-heart').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await toggleFavorite(currentAlbum.id, i);
+    });
+    li.querySelector('.btn-add-to-playlist').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openAddToPlaylistModal(currentAlbum.id, i);
     });
     li.querySelector('.btn-delete-track').addEventListener('click', (e) => {
       e.stopPropagation();
@@ -231,6 +352,50 @@ function renderTracks() {
   trackList.appendChild(addBtn);
 }
 
+// ── Favorites ─────────────────────────────────────────────────────────────────
+
+function isTrackFavorited(albumId, trackIndex) {
+  return userFavorites.some(f => f.album_id === albumId && f.track_index === trackIndex);
+}
+
+async function toggleFavorite(albumId, trackIndex) {
+  if (!currentUser || !currentAlbum) return;
+  const existing = userFavorites.find(
+    f => f.album_id === albumId && f.track_index === trackIndex
+  );
+  if (existing) {
+    await _sb.from('favorites').delete().eq('id', existing.id);
+    userFavorites = userFavorites.filter(f => f.id !== existing.id);
+  } else {
+    const track = currentAlbum.tracks[trackIndex];
+    const { data, error } = await _sb.from('favorites').insert({
+      user_id:      currentUser.id,
+      album_id:     albumId,
+      track_index:  trackIndex,
+      track_title:  track.title,
+      album_title:  currentAlbum.title,
+      album_artist: currentAlbum.artist,
+      album_cover:  currentAlbum.cover,
+      file_path:    track.file,
+    }).select().single();
+    if (error) { console.error('favorites insert:', error.message); return; }
+    userFavorites.unshift(data);
+  }
+  updateHeartIcon(trackIndex);
+}
+
+function updateHeartIcon(trackIndex) {
+  if (!currentAlbum) return;
+  const isFav = isTrackFavorited(currentAlbum.id, trackIndex);
+  // Кнопка в треклисте
+  const btn = document.querySelector(`.btn-heart[data-track="${trackIndex}"]`);
+  if (btn) btn.classList.toggle('btn-heart--active', isFav);
+  // Кнопка в плеере (если играет именно этот трек)
+  if (trackIndex === currentTrackIndex) {
+    btnPlayerHeart.classList.toggle('btn-heart--active', isFav);
+  }
+}
+
 // ── Playback ──────────────────────────────────────────────────────────────────
 
 function playTrack(index) {
@@ -246,6 +411,7 @@ function playTrack(index) {
 
   updatePlayerUI();
   highlightActiveTrack();
+  saveLastTrack();
 }
 
 function updatePlayerUI() {
@@ -260,6 +426,9 @@ function updatePlayerUI() {
   pfProgress.value = 0;
   updateProgressFill();
   updateFullscreenPlayerUI();
+  // Обновить кнопку сердца в плеере
+  const isFav = isTrackFavorited(currentAlbum.id, currentTrackIndex);
+  btnPlayerHeart.classList.toggle('btn-heart--active', isFav);
 }
 
 function highlightActiveTrack() {
@@ -507,6 +676,301 @@ document.addEventListener('keydown', (e) => {
   if (e.code === 'ArrowLeft') playPrev();
 });
 
+// ── Home View ─────────────────────────────────────────────────────────────────
+
+function renderHomeView() {
+  const lastTrack = loadLastTrack();
+  const lastSection = document.getElementById('home-last-played-section');
+  const lastEl = document.getElementById('home-last-played');
+
+  if (lastTrack) {
+    lastSection.style.display = '';
+    lastEl.innerHTML = `
+      <div class="home-last-card">
+        <img src="${lastTrack.cover || ''}" alt="${lastTrack.title}" class="home-last-cover" />
+        <div class="home-last-info">
+          <span class="home-last-title">${lastTrack.title}</span>
+          <span class="home-last-artist">${lastTrack.artist}</span>
+        </div>
+        <button class="btn-modal-save home-last-play" id="btn-resume-play">
+          <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M8 5v14l11-7z"/></svg>
+          Слушать
+        </button>
+      </div>`;
+    document.getElementById('btn-resume-play').addEventListener('click', () => {
+      const album = userAlbums.find(a => a.id === lastTrack.albumId);
+      if (album) {
+        currentAlbum = album;
+        playTrack(lastTrack.trackIndex);
+      }
+    });
+  } else {
+    lastSection.style.display = 'none';
+  }
+
+  const recentGrid = document.getElementById('home-recent-albums');
+  recentGrid.innerHTML = '';
+  userAlbums.slice(0, 6).forEach((album, index) => {
+    const card = document.createElement('div');
+    card.className = 'album-card';
+    card.innerHTML = `
+      <img src="${album.cover}" alt="${album.title}" loading="lazy" />
+      <div class="album-card-info">
+        <span class="album-card-title">${album.title}</span>
+        <span class="album-card-artist">${album.artist}</span>
+      </div>
+    `;
+    card.addEventListener('click', () => openAlbum(index));
+    recentGrid.appendChild(card);
+  });
+}
+
+// ── Favorites View ────────────────────────────────────────────────────────────
+
+function renderFavoritesView() {
+  renderFavoritesList();
+  renderPlaylistsSection();
+}
+
+function renderFavoritesList() {
+  const list = document.getElementById('favorites-list');
+  list.innerHTML = '';
+
+  if (!userFavorites.length) {
+    const li = document.createElement('li');
+    li.className = 'empty-state';
+    li.textContent = 'Нет любимых треков. Нажми ♥ на треке в альбоме';
+    list.appendChild(li);
+    return;
+  }
+
+  userFavorites.forEach((fav, i) => {
+    const li = document.createElement('li');
+    li.className = 'track-item';
+    li.dataset.index = i;
+    li.innerHTML = `
+      <img src="${fav.album_cover || ''}" class="fav-track-cover" alt="" />
+      <div class="fav-track-info">
+        <span class="track-name">${fav.track_title}</span>
+        <span class="fav-track-artist">${fav.album_artist} — ${fav.album_title}</span>
+      </div>
+      <button class="btn-heart btn-heart--active" data-fav="${fav.id}" title="Убрать из избранного">
+        <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+      </button>
+    `;
+    li.addEventListener('click', (e) => {
+      if (e.target.closest('.btn-heart')) return;
+      playFavoriteFromIndex(i);
+    });
+    li.querySelector('.btn-heart').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await _sb.from('favorites').delete().eq('id', fav.id);
+      userFavorites = userFavorites.filter(f => f.id !== fav.id);
+      renderFavoritesList();
+    });
+    list.appendChild(li);
+  });
+}
+
+function playFavoriteFromIndex(startIndex) {
+  const virtualAlbum = {
+    id:     'favorites',
+    title:  'Любимые треки',
+    artist: '',
+    cover:  userFavorites[startIndex]?.album_cover || '',
+    tracks: userFavorites.map(f => ({ title: f.track_title, file: f.file_path })),
+  };
+  currentAlbum = virtualAlbum;
+  playTrack(startIndex);
+}
+
+// ── Playlists ─────────────────────────────────────────────────────────────────
+
+function renderPlaylistsSection() {
+  const grid = document.getElementById('playlists-grid');
+  grid.innerHTML = '';
+
+  if (!userPlaylists.length) {
+    const msg = document.createElement('p');
+    msg.className = 'empty-state';
+    msg.textContent = 'Нет плейлистов. Нажми "+ Создать"';
+    grid.appendChild(msg);
+    return;
+  }
+
+  userPlaylists.forEach(pl => {
+    const card = document.createElement('div');
+    card.className = 'playlist-card';
+    card.innerHTML = `
+      <div class="playlist-card-icon">
+        <svg viewBox="0 0 24 24" fill="currentColor" width="32" height="32"><path d="M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z"/></svg>
+      </div>
+      <span class="playlist-card-name">${pl.name}</span>
+    `;
+    card.addEventListener('click', () => openPlaylist(pl.id));
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn-delete-album';
+    delBtn.title = 'Удалить плейлист';
+    delBtn.textContent = '×';
+    delBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm(`Удалить плейлист "${pl.name}"?`)) return;
+      await _sb.from('playlists').delete().eq('id', pl.id);
+      userPlaylists = userPlaylists.filter(p => p.id !== pl.id);
+      renderPlaylistsSection();
+    });
+    card.appendChild(delBtn);
+    grid.appendChild(card);
+  });
+}
+
+function openCreatePlaylistModal() {
+  document.getElementById('playlist-name-input').value = '';
+  document.getElementById('create-playlist-modal').classList.remove('hidden');
+  setTimeout(() => document.getElementById('playlist-name-input').focus(), 50);
+}
+
+async function createPlaylist(name) {
+  const { data, error } = await _sb.from('playlists').insert({
+    user_id: currentUser.id,
+    name: name,
+  }).select().single();
+  if (!error) {
+    userPlaylists.unshift(data);
+    renderPlaylistsSection();
+  }
+}
+
+async function openPlaylist(playlistId) {
+  const pl = userPlaylists.find(p => p.id === playlistId);
+  if (!pl) return;
+
+  const { data } = await _sb
+    .from('playlist_tracks')
+    .select('*')
+    .eq('playlist_id', playlistId)
+    .order('track_order', { ascending: true });
+
+  currentPlaylist = { ...pl, tracks: data || [] };
+  document.getElementById('playlist-title').textContent = pl.name;
+  document.getElementById('playlist-track-count').textContent =
+    `${currentPlaylist.tracks.length} ${pluralTracks(currentPlaylist.tracks.length)}`;
+
+  renderPlaylistTracks();
+  setView('playlist');
+}
+
+function pluralTracks(n) {
+  if (n % 10 === 1 && n % 100 !== 11) return 'трек';
+  if (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20)) return 'трека';
+  return 'треков';
+}
+
+function renderPlaylistTracks() {
+  const list = document.getElementById('playlist-track-list');
+  list.innerHTML = '';
+
+  if (!currentPlaylist || !currentPlaylist.tracks.length) {
+    const li = document.createElement('li');
+    li.className = 'empty-state';
+    li.textContent = 'Нет треков. Добавь треки через "+" в альбоме';
+    list.appendChild(li);
+    return;
+  }
+
+  currentPlaylist.tracks.forEach((t, i) => {
+    const li = document.createElement('li');
+    li.className = 'track-item';
+    li.dataset.index = i;
+    li.innerHTML = `
+      <span class="track-num">${i + 1}</span>
+      <span class="track-name">${t.track_title}</span>
+      <span style="font-size:12px;color:var(--muted);padding:0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${t.album_artist}</span>
+      <button class="btn-delete-track" title="Убрать из плейлиста">×</button>
+    `;
+    li.addEventListener('click', (e) => {
+      if (e.target.closest('.btn-delete-track')) return;
+      playPlaylist(i);
+    });
+    li.querySelector('.btn-delete-track').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await _sb.from('playlist_tracks').delete().eq('id', t.id);
+      currentPlaylist.tracks.splice(i, 1);
+      document.getElementById('playlist-track-count').textContent =
+        `${currentPlaylist.tracks.length} ${pluralTracks(currentPlaylist.tracks.length)}`;
+      renderPlaylistTracks();
+    });
+    list.appendChild(li);
+  });
+}
+
+function playPlaylist(startIndex = 0) {
+  if (!currentPlaylist || !currentPlaylist.tracks.length) return;
+  const virtualAlbum = {
+    id:     currentPlaylist.id,
+    title:  currentPlaylist.name,
+    artist: 'Плейлист',
+    cover:  currentPlaylist.tracks[0]?.album_cover || '',
+    tracks: currentPlaylist.tracks.map(t => ({ title: t.track_title, file: t.file_path })),
+  };
+  currentAlbum = virtualAlbum;
+  playTrack(startIndex);
+}
+
+async function addTrackToPlaylist(playlistId, albumId, trackIndex) {
+  if (!currentAlbum) return;
+  const track = currentAlbum.tracks[trackIndex];
+
+  const { data: existing } = await _sb
+    .from('playlist_tracks')
+    .select('track_order')
+    .eq('playlist_id', playlistId)
+    .order('track_order', { ascending: false })
+    .limit(1);
+
+  const nextOrder = existing && existing[0] ? existing[0].track_order + 1 : 0;
+
+  await _sb.from('playlist_tracks').insert({
+    playlist_id:  playlistId,
+    track_order:  nextOrder,
+    album_id:     albumId,
+    track_index:  trackIndex,
+    track_title:  track.title,
+    album_title:  currentAlbum.title,
+    album_artist: currentAlbum.artist,
+    album_cover:  currentAlbum.cover,
+    file_path:    track.file,
+  });
+}
+
+function openAddToPlaylistModal(albumId, trackIndex) {
+  const modal = document.getElementById('add-to-playlist-modal');
+  const list = document.getElementById('add-to-playlist-list');
+  list.innerHTML = '';
+
+  if (!userPlaylists.length) {
+    const msg = document.createElement('p');
+    msg.style.cssText = 'color:var(--muted);font-size:13px;padding:8px 0;';
+    msg.textContent = 'Нет плейлистов. Создайте первый на странице "Любимые"!';
+    list.appendChild(msg);
+  } else {
+    userPlaylists.forEach(pl => {
+      const btn = document.createElement('button');
+      btn.className = 'add-to-playlist-item';
+      btn.textContent = pl.name;
+      btn.addEventListener('click', async () => {
+        await addTrackToPlaylist(pl.id, albumId, trackIndex);
+        modal.classList.add('hidden');
+      });
+      list.appendChild(btn);
+    });
+  }
+
+  modal.classList.remove('hidden');
+  modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.add('hidden'); }, { once: true });
+}
+
 // ── Upload Modal ───────────────────────────────────────────────────────────────
 
 const uploadModal    = document.getElementById('upload-modal');
@@ -670,7 +1134,7 @@ async function saveUploadedAlbum() {
     saveBtn.textContent = 'Сохранение…';
     const { data, error } = await _sb
       .from('albums')
-      .insert({ title, artist, year: parseInt(uploadYearEl.value) || null, cover_path: coverPath, tracks: tracksMeta })
+      .insert({ title, artist, year: parseInt(uploadYearEl.value) || null, cover_path: coverPath, tracks: tracksMeta, user_id: currentUser.id })
       .select()
       .single();
     if (error) throw error;
@@ -704,8 +1168,8 @@ async function deleteUserAlbum(album) {
   const { error } = await _sb.from('albums').delete().eq('id', album.id);
   if (error) { console.error(error); return; }
 
-  const paths = [...(album._trackPaths || [])];
-  if (album._coverPath) paths.push(album._coverPath);
+  const paths = [...(album._trackPaths || []), ...(album._coverPath ? [album._coverPath] : [])]
+    .filter(p => p && !p.startsWith('http'));
   if (paths.length) await _sb.storage.from(BUCKET).remove(paths);
 
   userAlbums = userAlbums.filter(a => a.id !== album.id);
@@ -850,19 +1314,18 @@ async function addTracksToAlbum(files) {
 
   if (addBtn) addBtn.textContent = 'Загрузка…';
 
-  const albumId    = currentAlbum.id;
-  const startIndex = currentAlbum._trackPaths.length;
-  const newMeta    = [];
+  const albumId = currentAlbum.id;
+  const newMeta = [];
 
   try {
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       const ext  = file.name.split('.').pop();
-      const filePath = `${albumId}/${startIndex + i}.${ext}`;
+      const filePath = `${albumId}/${crypto.randomUUID()}.${ext}`;
       if (addBtn) addBtn.textContent = `Загрузка (${i + 1}/${files.length})…`;
       const { error } = await _sb.storage.from(BUCKET).upload(filePath, file);
       if (error) throw error;
-      newMeta.push({ title: parseTrackTitle(file.name), file_path: filePath, order: startIndex + i });
+      newMeta.push({ title: parseTrackTitle(file.name), file_path: filePath, order: currentAlbum._trackPaths.length + i });
     }
 
     // Rebuild full tracks array for DB (raw format)
@@ -891,6 +1354,338 @@ async function addTracksToAlbum(files) {
   }
 }
 
+// ── Auth ──────────────────────────────────────────────────────────────────────
+
+async function initAuth() {
+  const { data: { session } } = await _sb.auth.getSession();
+  if (session) {
+    currentUser = session.user;
+    await showApp();
+  } else {
+    setView('auth');
+  }
+
+  _sb.auth.onAuthStateChange(async (event, session) => {
+    if (event === 'INITIAL_SESSION') return;
+    if (session) {
+      currentUser = session.user;
+      await showApp();
+    } else {
+      currentUser = null;
+      showAuthScreen();
+    }
+  });
+
+  document.getElementById('btn-show-register').addEventListener('click', () => {
+    authFormLogin.classList.add('hidden');
+    authFormRegister.classList.remove('hidden');
+    registerErrorEl.textContent = '';
+  });
+  document.getElementById('btn-show-login').addEventListener('click', () => {
+    authFormRegister.classList.add('hidden');
+    authFormLogin.classList.remove('hidden');
+    loginErrorEl.textContent = '';
+  });
+
+  btnLogin.addEventListener('click', handleLogin);
+  btnRegister.addEventListener('click', handleRegister);
+  btnLogout.addEventListener('click', handleLogout);
+
+  loginPasswordEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') handleLogin(); });
+  registerConfirmEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') handleRegister(); });
+}
+
+async function loadFavorites() {
+  if (!currentUser) return;
+  const { data, error } = await _sb
+    .from('favorites')
+    .select('*')
+    .eq('user_id', currentUser.id)
+    .order('created_at', { ascending: false });
+  if (!error) userFavorites = data || [];
+}
+
+async function loadPlaylists() {
+  if (!currentUser) return;
+  const { data, error } = await _sb
+    .from('playlists')
+    .select('*')
+    .eq('user_id', currentUser.id)
+    .order('created_at', { ascending: false });
+  if (!error) userPlaylists = data || [];
+}
+
+async function showApp() {
+  await init();
+  await loadFavorites();
+  await loadPlaylists();
+  initBottomNav();
+  renderHomeView();
+  setView('home');
+}
+
+function showAuthScreen() {
+  audio.pause();
+  audio.src = '';
+  player.classList.add('hidden');
+  userAlbums = [];
+  currentAlbum = null;
+  currentTrackIndex = -1;
+  isPlaying = false;
+  albumsGrid.innerHTML = '';
+  userFavorites = [];
+  userPlaylists = [];
+  currentPlaylist = null;
+  // Сбросить форму регистрации на логин
+  authFormRegister.classList.add('hidden');
+  authFormLogin.classList.remove('hidden');
+  loginErrorEl.textContent = '';
+  setView('auth');
+}
+
+async function handleLogin() {
+  const email    = loginEmailEl.value.trim();
+  const password = loginPasswordEl.value;
+  loginErrorEl.textContent = '';
+
+  if (!email || !password) {
+    loginErrorEl.textContent = 'Введите email и пароль.';
+    return;
+  }
+
+  btnLogin.disabled = true;
+  btnLogin.textContent = 'Входим…';
+
+  const { error } = await _sb.auth.signInWithPassword({ email, password });
+
+  btnLogin.disabled = false;
+  btnLogin.textContent = 'Войти';
+
+  if (error) {
+    if (error.message.includes('Invalid login credentials')) {
+      loginErrorEl.textContent = 'Неверный email или пароль.';
+    } else if (error.message.includes('Email not confirmed')) {
+      loginErrorEl.textContent = 'Подтвердите email перед входом.';
+    } else {
+      loginErrorEl.textContent = error.message;
+    }
+  }
+}
+
+async function handleRegister() {
+  const email    = registerEmailEl.value.trim();
+  const password = registerPasswordEl.value;
+  const confirm  = registerConfirmEl.value;
+  registerErrorEl.textContent = '';
+  registerErrorEl.style.color = '#ff5555';
+
+  if (!email || !password || !confirm) {
+    registerErrorEl.textContent = 'Заполните все поля.';
+    return;
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    registerErrorEl.textContent = 'Введите корректный email.';
+    return;
+  }
+  if (password.length < 6) {
+    registerErrorEl.textContent = 'Пароль должен быть не менее 6 символов.';
+    return;
+  }
+  if (password !== confirm) {
+    registerErrorEl.textContent = 'Пароли не совпадают.';
+    return;
+  }
+
+  btnRegister.disabled = true;
+  btnRegister.textContent = 'Создаём аккаунт…';
+
+  const { data, error } = await _sb.auth.signUp({ email, password });
+
+  btnRegister.disabled = false;
+  btnRegister.textContent = 'Создать аккаунт';
+
+  if (error) {
+    if (error.message.includes('already registered') || error.message.includes('already been registered')) {
+      registerErrorEl.textContent = 'Аккаунт с таким email уже существует.';
+    } else if (error.message.toLowerCase().includes('email rate limit') || error.message.toLowerCase().includes('rate limit')) {
+      registerErrorEl.textContent = 'Слишком много попыток. Попробуйте позже (лимит: ~2 письма в час).';
+    } else if (error.message.toLowerCase().includes('sending confirmation email') || error.message.toLowerCase().includes('error sending')) {
+      registerErrorEl.textContent = 'Не удалось отправить письмо. Попробуйте позже или обратитесь к администратору.';
+    } else {
+      registerErrorEl.textContent = error.message;
+    }
+    return;
+  }
+
+  if (!data.session) {
+    registerErrorEl.style.color = '#A855F7';
+    registerErrorEl.textContent = 'Проверьте email — мы отправили ссылку для подтверждения.';
+  }
+  // Если session есть — onAuthStateChange сам вызовет showApp()
+}
+
+async function handleLogout() {
+  await _sb.auth.signOut();
+  // onAuthStateChange вызовет showAuthScreen()
+}
+
+// ── Jamendo ───────────────────────────────────────────────────────────────────
+
+function openJamendoModal() {
+  jamendoResults  = [];
+  jamendoSelected = null;
+  jamendoQueryEl.value            = '';
+  jamendoStatusEl.textContent     = '';
+  jamendoResultsEl.innerHTML      = '';
+  jamendoResultsEl.appendChild(jamendoStatusEl);
+  jamendoImportBtn.disabled       = true;
+  jamendoModal.classList.remove('hidden');
+  jamendoQueryEl.focus();
+}
+
+function closeJamendoModal() {
+  jamendoModal.classList.add('hidden');
+}
+
+async function searchJamendo() {
+  const query = jamendoQueryEl.value.trim();
+  if (!query) return;
+
+  jamendoResults  = [];
+  jamendoSelected = null;
+  jamendoImportBtn.disabled    = true;
+  jamendoResultsEl.innerHTML   = '';
+  jamendoStatusEl.textContent  = 'Поиск…';
+  jamendoResultsEl.appendChild(jamendoStatusEl);
+  jamendoSearchBtn.disabled    = true;
+
+  try {
+    const url = `${JAMENDO_BASE}/albums/?client_id=${JAMENDO_CLIENT_ID}` +
+                `&format=json&limit=10&namesearch=${encodeURIComponent(query)}&include=tracks`;
+    const res  = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+
+    jamendoResults = data.results || [];
+
+    if (!jamendoResults.length) {
+      jamendoStatusEl.textContent = 'Ничего не найдено. Попробуйте другой запрос.';
+      return;
+    }
+
+    jamendoStatusEl.textContent = '';
+    renderJamendoResults();
+  } catch (err) {
+    console.error('Jamendo search error:', err);
+    jamendoStatusEl.textContent = 'Ошибка поиска. Проверьте соединение.';
+  } finally {
+    jamendoSearchBtn.disabled = false;
+  }
+}
+
+function renderJamendoResults() {
+  Array.from(jamendoResultsEl.children).forEach(el => {
+    if (el !== jamendoStatusEl) el.remove();
+  });
+
+  jamendoResults.forEach((album, index) => {
+    const item = document.createElement('div');
+    item.className    = 'jamendo-result-item';
+    item.dataset.index = index;
+
+    const trackCount = album.tracks ? album.tracks.length : 0;
+
+    item.innerHTML = `
+      <img src="${album.image}" class="jamendo-result-cover" alt="${album.name}" loading="lazy" />
+      <div class="jamendo-result-info">
+        <span class="jamendo-result-title">${album.name}</span>
+        <span class="jamendo-result-artist">${album.artist_name}</span>
+        <span class="jamendo-result-meta">${trackCount} треков</span>
+      </div>`;
+
+    item.addEventListener('click', () => selectJamendoResult(index));
+    jamendoResultsEl.appendChild(item);
+  });
+}
+
+function selectJamendoResult(index) {
+  jamendoSelected = jamendoResults[index];
+  jamendoResultsEl.querySelectorAll('.jamendo-result-item').forEach((el, i) => {
+    el.classList.toggle('selected', i === index);
+  });
+  jamendoImportBtn.disabled = false;
+}
+
+async function importJamendoAlbum() {
+  if (!jamendoSelected || !currentUser) return;
+
+  const album = jamendoSelected;
+  jamendoImportBtn.disabled      = true;
+  jamendoImportBtn.textContent   = 'Добавление…';
+
+  try {
+    const tracksUrl = `${JAMENDO_BASE}/tracks/?client_id=${JAMENDO_CLIENT_ID}` +
+                      `&format=json&album_id=${album.id}&limit=50&audioformat=mp32`;
+    const tracksRes  = await fetch(tracksUrl);
+    const tracksData = await tracksRes.json();
+    const tracks     = tracksData.results || [];
+
+    if (!tracks.length) {
+      alert('Не удалось получить треки альбома.');
+      return;
+    }
+
+    const tracksMeta = tracks.map((t, i) => ({
+      title:     t.name,
+      file_path: t.audio,
+      order:     i,
+    }));
+
+    const { data: row, error } = await _sb
+      .from('albums')
+      .insert({
+        title:      album.name,
+        artist:     album.artist_name,
+        year:       album.releasedate ? parseInt(album.releasedate.slice(0, 4)) : null,
+        cover_path: album.image,
+        tracks:     tracksMeta,
+        user_id:    currentUser.id,
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    userAlbums.unshift({
+      id:          row.id,
+      title:       row.title,
+      artist:      row.artist,
+      year:        row.year,
+      cover:       album.image,
+      tracks:      tracksMeta.map(t => ({ title: t.title, file: t.file_path })),
+      _userAlbum:  true,
+      _coverPath:  album.image,
+      _trackPaths: tracksMeta.map(t => t.file_path),
+    });
+
+    renderAlbums();
+    closeJamendoModal();
+  } catch (err) {
+    console.error('Jamendo import error:', err);
+    alert('Ошибка при добавлении альбома. Проверь консоль.');
+  } finally {
+    jamendoImportBtn.disabled    = false;
+    jamendoImportBtn.textContent = 'Добавить в библиотеку';
+  }
+}
+
+document.getElementById('btn-jamendo-search').addEventListener('click', openJamendoModal);
+jamendoCancelBtn.addEventListener('click', closeJamendoModal);
+jamendoImportBtn.addEventListener('click', importJamendoAlbum);
+jamendoSearchBtn.addEventListener('click', searchJamendo);
+jamendoModal.addEventListener('click', e => { if (e.target === jamendoModal) closeJamendoModal(); });
+jamendoQueryEl.addEventListener('keydown', e => { if (e.key === 'Enter') searchJamendo(); });
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 async function init() {
@@ -898,4 +1693,4 @@ async function init() {
   renderAlbums();
 }
 
-init();
+initAuth();
